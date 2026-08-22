@@ -34,6 +34,26 @@ class MarkesteijnOpenCLDemosaicer:
         options = ["-I", include_dir]
         self.prg = cl.Program(self.ctx, kernel_code).build(options=options)
 
+        # Cache kernel references to prevent RepeatedKernelRetrieval warnings and improve performance
+        self.k_initial_copy = self.prg.markesteijn_initial_copy
+        self.k_green_minmax = self.prg.markesteijn_green_minmax
+        self.k_interpolate_green = self.prg.markesteijn_interpolate_green
+        self.k_recalculate_green = self.prg.markesteijn_recalculate_green
+        self.k_solitary_green = self.prg.markesteijn_solitary_green
+        self.k_red_and_blue = self.prg.markesteijn_red_and_blue
+        self.k_interpolate_twoxtwo = self.prg.markesteijn_interpolate_twoxtwo
+        self.k_convert_yuv = self.prg.markesteijn_convert_yuv
+        self.k_differentiate = self.prg.markesteijn_differentiate
+        self.k_homo_threshold = self.prg.markesteijn_homo_threshold
+        self.k_homo_set = self.prg.markesteijn_homo_set
+        self.k_homo_sum = self.prg.markesteijn_homo_sum
+        self.k_homo_max = self.prg.markesteijn_homo_max
+        self.k_homo_max_corr = self.prg.markesteijn_homo_max_corr
+        self.k_homo_quench = self.prg.markesteijn_homo_quench
+        self.k_zero = self.prg.markesteijn_zero
+        self.k_accu = self.prg.markesteijn_accu
+        self.k_final = self.prg.markesteijn_final
+
     def demosaic(self, raw_image: np.ndarray, xtrans_pattern: np.ndarray, passes: int = 3, 
                  black_level: float = None, white_level: float = None, crop: bool = False) -> np.ndarray:
         """
@@ -106,26 +126,6 @@ class MarkesteijnOpenCLDemosaicer:
         PAD_G1_G3, PAD_G_INTERP, PAD_G_RECALC = 3, 3, 6
         pad_rb_g, pad_rb_br, pad_g22, pad_yuv, pad_homo = 5, 5, 4, 13, 15
 
-        # Cache kernel references to prevent RepeatedKernelRetrieval warnings and improve performance
-        k_initial_copy = self.prg.markesteijn_initial_copy
-        k_green_minmax = self.prg.markesteijn_green_minmax
-        k_interpolate_green = self.prg.markesteijn_interpolate_green
-        k_recalculate_green = self.prg.markesteijn_recalculate_green
-        k_solitary_green = self.prg.markesteijn_solitary_green
-        k_red_and_blue = self.prg.markesteijn_red_and_blue
-        k_interpolate_twoxtwo = self.prg.markesteijn_interpolate_twoxtwo
-        k_convert_yuv = self.prg.markesteijn_convert_yuv
-        k_differentiate = self.prg.markesteijn_differentiate
-        k_homo_threshold = self.prg.markesteijn_homo_threshold
-        k_homo_set = self.prg.markesteijn_homo_set
-        k_homo_sum = self.prg.markesteijn_homo_sum
-        k_homo_max = self.prg.markesteijn_homo_max
-        k_homo_max_corr = self.prg.markesteijn_homo_max_corr
-        k_homo_quench = self.prg.markesteijn_homo_quench
-        k_zero = self.prg.markesteijn_zero
-        k_accu = self.prg.markesteijn_accu
-        k_final = self.prg.markesteijn_final
-
         # 3. Allocate OpenCL Buffers & Device Memories
         dev_in = cl.Image(self.ctx, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, 
                           cl.ImageFormat(cl.channel_order.R, cl.channel_type.FLOAT), 
@@ -161,7 +161,7 @@ class MarkesteijnOpenCLDemosaicer:
         # 4. Dispatch the Pipeline Kernels
         
         # Step A: Initial Copy
-        k_initial_copy(self.queue, global_size, None,
+        self.k_initial_copy(self.queue, global_size, None,
                       dev_in, dev_rgbv[0], np.int32(width), np.int32(height), dev_xtrans)
 
         # Step B: Duplicate Initial RGBV buffers
@@ -170,13 +170,13 @@ class MarkesteijnOpenCLDemosaicer:
 
         # Step C: Green Min/Max
         local_mem_gminmax = cl.LocalMemory(4 * 22 * 22)
-        k_green_minmax(self.queue, global_size, local_size,
+        self.k_green_minmax(self.queue, global_size, local_size,
                       dev_rgbv[0], dev_gminmax, np.int32(width), np.int32(height), np.int32(PAD_G1_G3),
                       sgreen_arg, dev_xtrans, dev_allhex, local_mem_gminmax)
 
         # Step D: Interpolate Green
         local_mem_interp = cl.LocalMemory(4 * 4 * 28 * 28)
-        k_interpolate_green(self.queue, global_size, local_size,
+        self.k_interpolate_green(self.queue, global_size, local_size,
                             dev_rgbv[0], dev_rgbv[1], dev_rgbv[2], dev_rgbv[3],
                             dev_gminmax, np.int32(width), np.int32(height),
                             np.int32(PAD_G_INTERP), sgreen_arg, dev_xtrans, dev_allhex,
@@ -190,7 +190,7 @@ class MarkesteijnOpenCLDemosaicer:
                     cl.enqueue_copy(self.queue, dev_rgbv[c + 4], dev_rgbv[c], byte_count=4 * width * height * 4)
                     
             if pass_idx > 0:
-                k_recalculate_green(self.queue, global_size, None,
+                self.k_recalculate_green(self.queue, global_size, None,
                                     dev_rgbv[rgb_offset + 0], dev_rgbv[rgb_offset + 1],
                                     dev_rgbv[rgb_offset + 2], dev_rgbv[rgb_offset + 3],
                                     dev_gminmax, np.int32(width), np.int32(height),
@@ -204,14 +204,14 @@ class MarkesteijnOpenCLDemosaicer:
                 dir_arg = np.array((i_val, i_val ^ 1), dtype=cl_char2)
                 trgb_idx = rgb_offset + [0, 1, 2, 2, 3, 3][d]
                 
-                k_solitary_green(self.queue, global_size, local_size,
+                self.k_solitary_green(self.queue, global_size, local_size,
                                  dev_rgbv[trgb_idx], dev_aux, np.int32(width), np.int32(height), np.int32(pad_rb_g),
                                  np.int32(d), dir_arg, np.int32(h_val), sgreen_arg, dev_xtrans, local_mem_solitary)
 
             # Red and Blue Interpolation
             local_mem_rb = cl.LocalMemory(4 * 4 * 22 * 22)
             for d in range(4):
-                k_red_and_blue(self.queue, global_size, local_size,
+                self.k_red_and_blue(self.queue, global_size, local_size,
                                dev_rgbv[rgb_offset + d], np.int32(width), np.int32(height), np.int32(pad_rb_br),
                                np.int32(d), sgreen_arg, dev_xtrans, local_mem_rb)
                 
@@ -219,57 +219,57 @@ class MarkesteijnOpenCLDemosaicer:
             local_mem_g22 = cl.LocalMemory(4 * 4 * 20 * 20)
             for d in range(0, ndir, 2):
                 n = d // 2
-                k_interpolate_twoxtwo(self.queue, global_size, local_size,
+                self.k_interpolate_twoxtwo(self.queue, global_size, local_size,
                                       dev_rgbv[rgb_offset + n], np.int32(width), np.int32(height), np.int32(pad_g22),
                                       np.int32(d), sgreen_arg, dev_xtrans, dev_allhex, local_mem_g22)
 
         # Step F: Convert YUV and Differentiate
         local_mem_diff = cl.LocalMemory(4 * 4 * 18 * 18)
         for d in range(ndir):
-            k_convert_yuv(self.queue, global_size, None,
+            self.k_convert_yuv(self.queue, global_size, None,
                           dev_rgbv[d], dev_aux, np.int32(width), np.int32(height), np.int32(pad_yuv))
-            k_differentiate(self.queue, global_size, local_size,
+            self.k_differentiate(self.queue, global_size, local_size,
                             dev_aux, dev_drv[d], np.int32(width), np.int32(height), np.int32(pad_yuv),
                             np.int32(d), local_mem_diff)
 
         # Step G: Homogeneity Thresholding & Setup
         local_mem_homo = cl.LocalMemory(4 * 18 * 18)
         for d in range(ndir):
-            k_homo_threshold(self.queue, global_size, None,
+            self.k_homo_threshold(self.queue, global_size, None,
                              dev_drv[d], dev_aux, np.int32(width), np.int32(height), np.int32(pad_homo), np.int32(d))
 
         for d in range(ndir):
-            k_homo_set(self.queue, global_size, local_size,
+            self.k_homo_set(self.queue, global_size, local_size,
                        dev_drv[d], dev_aux, dev_homo[d], np.int32(width), np.int32(height), np.int32(pad_homo),
                        local_mem_homo)
 
         # Step H: Sum Homogeneity
         local_mem_homosum = cl.LocalMemory(1 * 20 * 20)
         for d in range(ndir):
-            k_homo_sum(self.queue, global_size, local_size,
+            self.k_homo_sum(self.queue, global_size, local_size,
                        dev_homo[d], dev_homosum[d], np.int32(width), np.int32(height), np.int32(pad_tile),
                        local_mem_homosum)
 
         # Step I: Homogeneity Max Correlation
         for d in range(ndir):
-            k_homo_max(self.queue, global_size, None,
+            self.k_homo_max(self.queue, global_size, None,
                        dev_homosum[d], dev_aux, np.int32(width), np.int32(height), np.int32(pad_tile), np.int32(d))
 
-        k_homo_max_corr(self.queue, global_size, None,
+        self.k_homo_max_corr(self.queue, global_size, None,
                         dev_aux, np.int32(width), np.int32(height), np.int32(pad_tile))
 
         # Step J: Homogeneity Quenching
         if passes > 1:
             for d in range(ndir - 4):
-                k_homo_quench(self.queue, global_size, None,
+                self.k_homo_quench(self.queue, global_size, None,
                               dev_homosum[d], dev_homosum[d + 4], np.int32(width), np.int32(height), np.int32(pad_tile))
 
         # Step K: Accumulation Zero & Loops
-        k_zero(self.queue, global_size, None, dev_out, np.int32(width), np.int32(height), np.int32(pad_tile))
+        self.k_zero(self.queue, global_size, None, dev_out, np.int32(width), np.int32(height), np.int32(pad_tile))
 
         dev_t1, dev_t2 = dev_out, dev_tmptmp
         for d in range(ndir):
-            k_accu(self.queue, global_size, None,
+            self.k_accu(self.queue, global_size, None,
                    dev_t1, dev_t2, dev_rgbv[d], dev_homosum[d], dev_aux, np.int32(width), np.int32(height),
                    np.int32(pad_tile))
             dev_t1, dev_t2 = dev_t2, dev_t1
@@ -278,7 +278,7 @@ class MarkesteijnOpenCLDemosaicer:
             cl.enqueue_copy(self.queue, dev_tmptmp, dev_t1, dest_origin=(0,0), src_origin=(0,0), region=(width, height))
 
         # Step L: Final Smooth
-        k_final(self.queue, global_size, None,
+        self.k_final(self.queue, global_size, None,
                 dev_tmptmp, dev_out, np.int32(width), np.int32(height), np.int32(pad_tile))
 
         # 5. Read Back the Final Image from GPU
