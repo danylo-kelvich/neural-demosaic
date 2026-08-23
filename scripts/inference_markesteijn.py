@@ -7,64 +7,13 @@ from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.demosaic_opencl import MarkesteijnOpenCLDemosaicer
+from src.utils import apply_raw_processing
 import os
 os.environ['PYOPENCL_CTX'] = '0'
 
 RAF_PATH = "samples/DSCF0049.RAF"
 OUTPUT_PATH = "output/result_markesteijn.png"
 KERNEL_PATH = "src/kernels/demosaic_markesteijn.cl"
-
-
-def apply_color_matrix(rgb: np.ndarray, xyz_to_cam: np.ndarray) -> np.ndarray:
-    XYZ_TO_SRGB = np.array([
-        [ 3.2404542, -1.5371385, -0.4985314],
-        [-0.9692660,  1.8760108,  0.0415560],
-        [ 0.0556434, -0.2040259,  1.0572252],
-    ], dtype=np.float32)
-    srgb_to_xyz = np.linalg.inv(XYZ_TO_SRGB)
-    srgb_to_cam = xyz_to_cam @ srgb_to_xyz
-    row_sums = srgb_to_cam.sum(axis=1, keepdims=True)
-    row_sums = np.where(np.abs(row_sums) > 1e-8, row_sums, 1.0)
-    srgb_to_cam /= row_sums
-    cam_to_srgb = np.linalg.inv(srgb_to_cam)
-    h, w = rgb.shape[1], rgb.shape[2]
-    return np.maximum(cam_to_srgb @ rgb.reshape(3, -1), 0).reshape(3, h, w)
-
-
-def apply_aces(rgb: np.ndarray, exposure: float = 2.0) -> np.ndarray:
-    x = rgb * exposure
-    return np.clip((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0)
-
-
-def apply_srgb_gamma(rgb: np.ndarray) -> np.ndarray:
-    rgb = np.clip(rgb, 0, 1)
-    return np.where(rgb <= 0.0031308, rgb * 12.92, 1.055 * np.power(rgb, 1 / 2.4) - 0.055)
-
-
-def apply_orientation(rgb: np.ndarray, orientation: str) -> np.ndarray:
-    mapping = {
-        "Normal": (False, False, False),
-        "ReverseYaw": (False, True, False),
-        "Rotate180": (False, True, True),
-        "ReverseRoll": (False, False, True),
-        "ReversePitch": (True, True, False),
-        "Rotate90": (True, False, False),
-        "MirrorHorizontalAndRotate90": (True, False, True),
-        "Rotate270": (True, True, True),
-    }
-    transpose, hflip, vflip = mapping.get(orientation, (False, False, False))
-    if transpose:
-        rgb = np.transpose(rgb, (0, 2, 1))
-        if hflip:
-            rgb = np.flip(rgb, axis=1)
-        if vflip:
-            rgb = np.flip(rgb, axis=2)
-    else:
-        if hflip:
-            rgb = np.flip(rgb, axis=2)
-        if vflip:
-            rgb = np.flip(rgb, axis=1)
-    return rgb
 
 
 if __name__ == "__main__":
@@ -109,20 +58,7 @@ if __name__ == "__main__":
         rgb_hwc = demosaicer.demosaic(raw_image=cfa, xtrans_pattern=pattern_grid, passes=1)
         rgb = np.transpose(rgb_hwc, (2, 0, 1)).astype(np.float32)
 
-        xyz_to_cam = np.array(img.xyz_to_cam[:3], dtype=np.float32)
-        if not np.any(xyz_to_cam):
-            if "D65" in img.color_matrix:
-                xyz_to_cam = np.array(img.color_matrix["D65"], dtype=np.float32).reshape(3, 3)
-            elif img.color_matrix:
-                first_key = list(img.color_matrix.keys())[0]
-                xyz_to_cam = np.array(img.color_matrix[first_key], dtype=np.float32).reshape(3, 3)
-            else:
-                xyz_to_cam = np.eye(3, dtype=np.float32)
-
-        rgb = apply_color_matrix(rgb, xyz_to_cam)
-        rgb = apply_aces(rgb)
-        rgb = apply_srgb_gamma(rgb)
-        rgb = apply_orientation(rgb, img.orientation)
+        rgb = apply_raw_processing(rgb, img)
 
     out = np.clip(np.round(np.transpose(rgb, (1, 2, 0)) * 255.0), 0, 255).astype(np.uint8)
     Image.fromarray(out, 'RGB').save(OUTPUT_PATH)

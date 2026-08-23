@@ -1,4 +1,5 @@
 import numpy as np
+from rawler_py.rawler_py import RawImage
 
 def apply_color_matrix(rgb: np.ndarray, xyz_to_cam: np.ndarray) -> np.ndarray:
     """Convert camera RGB to sRGB via row-normalized color matrix."""
@@ -56,4 +57,23 @@ def apply_orientation(rgb: np.ndarray, orientation: str) -> np.ndarray:
             rgb = np.flip(rgb, axis=2)
         if vflip:
             rgb = np.flip(rgb, axis=1)
+    return rgb
+
+
+def apply_raw_processing(rgb: np.ndarray, img: RawImage) -> np.ndarray:
+    xyz_to_cam = np.array(img.xyz_to_cam[:3], dtype=np.float32)
+    if not np.any(xyz_to_cam):
+        if "D65" in img.color_matrix:
+            xyz_to_cam = np.array(img.color_matrix["D65"], dtype=np.float32).reshape(3, 3)
+        elif img.color_matrix:
+            first_key = list(img.color_matrix.keys())[0]
+            xyz_to_cam = np.array(img.color_matrix[first_key], dtype=np.float32).reshape(3, 3)
+        else:
+            xyz_to_cam = np.eye(3, dtype=np.float32)
+
+    rgb = apply_color_matrix(rgb, xyz_to_cam)
+    rgb = apply_aces(rgb)
+    rgb = apply_srgb_gamma(rgb)
+    rgb = apply_orientation(rgb, img.orientation)
+
     return rgb

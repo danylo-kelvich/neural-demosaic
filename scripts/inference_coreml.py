@@ -11,8 +11,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.cfa import XTRANS_PATTERN, BAYER_PATTERN
 from src.models import PackedXTransNet
 from scripts.export_coreml import ExportModel
-from src.utils import (apply_color_matrix, apply_aces,
-                                    apply_srgb_gamma, apply_orientation)
+from src.utils import apply_raw_processing
 
 CKPT = "weights/packed_5183_3208.pt"
 MLPKG = "weights/packed_coreml.mlpackage"
@@ -112,20 +111,7 @@ if __name__ == "__main__":
         elapsed = time.perf_counter() - t0
         print(f"  {elapsed:.2f}s ({w * h / elapsed / 1e6:.1f} MP/s)")
 
-        xyz_to_cam = np.array(img.xyz_to_cam[:3], dtype=np.float32)
-        if not np.any(xyz_to_cam):
-            if "D65" in img.color_matrix:
-                xyz_to_cam = np.array(img.color_matrix["D65"], dtype=np.float32).reshape(3, 3)
-            elif img.color_matrix:
-                first_key = list(img.color_matrix.keys())[0]
-                xyz_to_cam = np.array(img.color_matrix[first_key], dtype=np.float32).reshape(3, 3)
-            else:
-                xyz_to_cam = np.eye(3, dtype=np.float32)
-
-        rgb = apply_color_matrix(rgb, xyz_to_cam)
-        rgb = apply_aces(rgb)
-        rgb = apply_srgb_gamma(rgb)
-        rgb = apply_orientation(rgb, img.orientation)
+        apply_raw_processing(rgb, img)
 
     out = np.clip(np.round(np.transpose(rgb, (1, 2, 0)) * 255.0), 0, 255).astype(np.uint8)
     Path(OUTPUT_PATH).parent.mkdir(exist_ok=True)
